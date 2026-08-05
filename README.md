@@ -5,7 +5,8 @@ Bootstrap an Azure OpenShift Container Platform (OCP) cluster for OpenShift Virt
 1. Dedicated **infra** nodes (router, registry, monitoring, GitOps)
 2. OpenShift **GitOps** (Argo CD) on infra nodes
 3. Dedicated **storage** nodes and **OpenShift Data Foundation** (ODF)
-4. Root **app-of-apps** with cluster-agnostic configuration (ingress domain, default storage class, OCP version)
+4. Regular **worker** nodes for kube-burner / OpenShift Virtualization load tests
+5. Root **app-of-apps** with cluster-agnostic configuration (ingress domain, default storage class, OCP version)
 
 Start from a clean **installer-provisioned infrastructure (IPI)** cluster on Microsoft Azure.
 
@@ -49,16 +50,25 @@ Validated against **OCP 4.20** on Azure (`eastus`). Scripts discover region and 
 │  Taint: node.ocs.openshift.io/storage=true:NoSchedule       │
 │  • ODF / Ceph OSDs, MONs, MCG                               │
 └─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│  Worker nodes — 1 per AZ (default), untainted               │
+│  Label: node-role.kubernetes.io/worker                      │
+│  SKU default: Standard_E32as_v6 (AMD memory-opt, 32 vCPU)   │
+│  Nested virt: MachineConfig 80-enable-nested-virt           │
+│  • kube-burner-ocp virt workloads / KubeVirt VMs            │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 Default Azure VM sizes (overridable):
 
 | Role | Parameter | Default |
 |------|-----------|---------|
-| Infra | `INFRA_VM_SIZE` | `Standard_D8s_v3` |
-| Storage (ODF) | `ODF_VM_SIZE` | `Standard_D16s_v3` |
+| Infra | `INFRA_VM_SIZE` | `Standard_D8s_v6` |
+| Storage (ODF) | `ODF_VM_SIZE` | `Standard_D16s_v6` |
+| Worker (kube-burner) | `WORKER_VM_SIZE` | `Standard_E32as_v6` (AMD, 32 vCPU / 256 GiB) |
 
-Worker MachineSets created by the installer are **scaled to 0 and deleted** after infra workloads move to infra nodes. Application / KubeVirt capacity can be added later as new MachineSets.
+Installer worker MachineSets are **scaled to 0 and deleted** after infra workloads move to infra nodes. Recreate capacity with `setup/workers/install.sh` before running kube-burner.
 
 > **Subscription note:** Infra nodes are intended only for platform infrastructure workloads (router, registry, monitoring, GitOps, and similar). Under Red Hat OpenShift subscription rules, scheduling **user applications** on infra-labeled nodes can cause those nodes to be counted as normal **workers**. In production, keep apps (including Elasticsearch, Grafana, and other test tooling) off infra and on worker/application MachineSets. **This repository places Elasticsearch and Grafana on infra anyway** to simplify the load-test lab topology—treat that as a PoC convenience, not a recommended production pattern.
 
@@ -68,13 +78,16 @@ Worker MachineSets created by the installer are **scaled to 0 and deleted** afte
 setup/
   infra/          # Out-of-band: infra MachineSets + move platform workloads
   gitops/         # Out-of-band: OpenShift GitOps Operator (pinned to infra)
-  storage/        # Out-of-band: ODF storage MachineSets
+  storage/        # Out-of-band: ODF storage MachineSets + managed-csi-v2
+  workers/        # Out-of-band: untainted workers for kube-burner / virt
 argocd/
   main/           # Prerequisites + app-of-apps bootstrap
   manifests/
-    cluster-objects/   # AppProject, RBAC, PostSync cluster-config hook
-    applications/      # Child Applications / ApplicationSets (ODF, …)
-    odf/               # ODF operator + StorageCluster manifests
+    cluster-objects/            # AppProject, RBAC, PostSync cluster-config hook
+    applications/               # Child Applications / ApplicationSets
+    openshift-virtualization/   # CNV operator + HyperConverged
+    elasticsearch/              # ECK operator + instance
+    grafana/                    # Grafana operator + instance
 ```
 
 ## Bootstrap order
@@ -83,13 +96,14 @@ argocd/
 Clean Azure IPI cluster
   → 1. setup/infra/install.sh
   → 2. setup/gitops/install.sh
-  → 3. setup/storage/install.sh
-  → 4. argocd/main/apply-prerequisites.sh
-  → 5. argocd/main/bootstrap-app-of-apps.sh
-  → (later) child apps via GitOps only
+  → 3. setup/storage/install.sh   # storage nodes + managed-csi-v2; install ODF separately
+  → 4. setup/workers/install.sh   # untainted workers for kube-burner
+  → 5. argocd/main/apply-prerequisites.sh
+  → 6. argocd/main/bootstrap-app-of-apps.sh
+  → (later) child apps via GitOps (CNV, Elasticsearch, Grafana, …)
 ```
 
-Steps 1–3 are **out-of-band** (Machine API / Operator Subscription). Steps 4–5 wire Argo CD so day-2 workloads (including ODF operator + StorageCluster when manifests are in Git) sync from this repository.
+Steps 1–4 are **out-of-band** (Machine API / ODF). Steps 5–6 wire Argo CD so day-2 workloads sync from this repository. **ODF itself is not managed by Argo CD** — install the operator and StorageCluster after storage nodes are Ready (console or CLI per the ODF docs).
 
 ---
 
@@ -202,7 +216,7 @@ What the script does:
 
 1. SKU-checks `ODF_VM_SIZE` in the cluster region / zones (same soft-fail behavior as infra)
 2. Checks Azure disk SKU `PremiumV2_LRS` is available in the region / zones (`setup/storage/check-disk-sku.sh`)
-3. Creates StorageClass **`managed-csi-v2`** (`disk.csi.azure.com`, `skuname: PremiumV2_LRS`, `cachingMode: None`) for ODF OSD PVCs
+3. Creates StorageClass **`managed-csi-v2`** from `setup/storage/managed-csi-v2-storageclass.yaml` (`disk.csi.azure.com`, `skuname: PremiumV2_LRS`, `cachingMode: None`) for ODF OSD PVCs
 4. Creates MachineSets `<infraId>-storage-<region><zone>` with:
    - Labels: `node-role.kubernetes.io/storage`, `cluster.ocs.openshift.io/openshift-storage`
    - Taint: `node.ocs.openshift.io/storage=true:NoSchedule`
@@ -217,11 +231,61 @@ oc get sc managed-csi-v2
 
 ODF requires enough aggregate CPU/RAM across these nodes (docs: ~30 CPUs / 72 GiB for a full cluster; lean profiles may deploy with less). `Standard_D16s_v3` × 3 is the default sizing for a balanced Azure deployment.
 
+After nodes are Ready, install **OpenShift Data Foundation** out-of-band (not via Argo CD) — Operator + StorageCluster in `openshift-storage`, with OSD PVCs on `managed-csi-v2`. See [Deploying ODF using Microsoft Azure (4.20)](https://docs.redhat.com/en/documentation/red_hat_openshift_data_foundation/4.20/html/deploying_openshift_data_foundation_using_microsoft_azure/index).
+
+```bash
+oc get csv -n openshift-storage
+oc get storagecluster -n openshift-storage
+oc get sc   # expect ocs-storagecluster-ceph-rbd, cephfs, noobaa, …
+oc get cephcluster -n openshift-storage -o jsonpath='{.items[0].status.ceph.health}{"\n"}'
+```
+
 ---
 
-## Step 4 — Argo CD prerequisites
+## Step 4 — Worker nodes (kube-burner)
 
-Enables aggregated cluster roles on the Argo CD instance and applies a ClusterRole that grants the Application Controller rights for CRDs this repo manages (KubeVirt, ODF/OCS, OLM, monitoring, snapshots, …).
+Recreates untainted worker MachineSets (one per AZ) for kube-burner-ocp / OpenShift Virtualization workloads. Run after infra has removed the installer workers.
+
+Default SKU is **AMD memory-optimized** [`Standard_E32as_v6`](https://learn.microsoft.com/en-us/azure/virtual-machines/sizes/memory-optimized/easv6-series) (32 vCPU / 256 GiB, nested virtualization supported). The script also applies MachineConfig `80-enable-nested-virt` so `/etc/modprobe.d/kvm.conf` sets `nested=1` for both `kvm_amd` and `kvm_intel` on the worker MachineConfigPool.
+
+```bash
+# Defaults from setup/workers/params.env (Standard_E32as_v6, 1 per zone)
+./setup/workers/install.sh
+
+# Larger AMD workers
+WORKER_VM_SIZE=Standard_E48as_v6 WORKER_REPLICAS=1 ./setup/workers/install.sh
+
+# Scale a single zone later
+oc scale machineset <infraId>-worker-eastus1 -n openshift-machine-api --replicas=3
+```
+
+What the script does:
+
+1. Applies `setup/workers/machineconfig-nested-virt.yaml` (worker role)
+2. SKU-checks `WORKER_VM_SIZE` in the cluster region / zones
+3. Creates or scales MachineSets `<infraId>-worker-<region><zone>` with:
+   - Label `node-role.kubernetes.io/worker` only (no infra/storage taints)
+   - MachineSet label `app.kubernetes.io/part-of=openshift-virt-loadtest` (so `setup/infra/install.sh` re-runs skip them)
+4. Waits until the expected number of worker-only nodes are Ready
+5. Best-effort check: `cat /sys/module/kvm_amd/parameters/nested` (or `kvm_intel`) is `1` / `Y`
+
+Verify:
+
+```bash
+oc get machineset -n openshift-machine-api | grep worker
+oc get nodes -l 'node-role.kubernetes.io/worker,!node-role.kubernetes.io/infra,!node-role.kubernetes.io/storage' -o wide
+oc get mcp worker
+oc get mc 80-enable-nested-virt
+
+# Nested virt on a worker (AMD hosts)
+oc debug node/<worker> -- chroot /host cat /sys/module/kvm_amd/parameters/nested
+```
+
+---
+
+## Step 5 — Argo CD prerequisites
+
+Enables aggregated cluster roles on the Argo CD instance and applies a ClusterRole that grants the Application Controller rights for platform resources (`Namespace`, `Secret`, `Ingress`, …) plus CRDs this repo manages via GitOps (KubeVirt, OLM, monitoring, snapshots, Elasticsearch, Grafana, …). With `aggregatedClusterRoles: true`, write access is only what that ClusterRole lists.
 
 ```bash
 ./argocd/main/apply-prerequisites.sh
@@ -233,14 +297,14 @@ When you add new Operators / CRDs under GitOps, extend:
 
 ---
 
-## Step 5 — Root app-of-apps
+## Step 6 — Root app-of-apps
 
 Bootstraps the root Application that syncs:
 
 | Source | Path | Contents |
 |--------|------|----------|
 | 1 | `argocd/manifests/cluster-objects` | AppProject, hook RBAC, PostSync Job |
-| 2 | `argocd/manifests/applications` | Child Applications / ApplicationSets (ODF, …) |
+| 2 | `argocd/manifests/applications` | Child Applications / ApplicationSets (CNV, Elasticsearch, Grafana, …) |
 
 ```bash
 # Upstream defaults
@@ -258,8 +322,6 @@ REPO_URL=https://github.com/<org>/openshift-virt-loadtest.git \
 
 ```bash
 kubectl apply -k argocd/manifests/cluster-objects/
-kubectl apply -k argocd/manifests/odf/operator/
-# StorageCluster after ODF CRDs exist — see ODF section below
 ```
 
 ### Global cluster configuration (cluster-agnostic apps)
@@ -270,7 +332,7 @@ A PostSync Job creates / updates Secret `openshift-gitops-cluster-configuration`
 |------------|---------|----------|
 | `ingress-domain` | `apps.demo.example.com` | Ingress / Route hosts |
 | `default-storage-class` | `managed-csi` | App PVCs (ES/Grafana, etc.) — cluster default |
-| `odf-osd-storage-class` | `managed-csi-v2` | Informational; ODF OSDs use `managed-csi-v2` in Git |
+| `odf-osd-storage-class` | `managed-csi-v2` | Informational; OSD SC created by `setup/storage` |
 | `ocp-version` | `4.20.32` | Full cluster version |
 | `ocp-channel` | `4.20` | Operator channel major.minor |
 
@@ -287,7 +349,54 @@ Child ApplicationSets select the in-cluster secret and inject values, for exampl
 value: "{{ index .metadata.annotations \"default-storage-class\" }}"
 ```
 
-Do **not** hardcode the Azure apps domain in Git manifests. Use placeholders (e.g. `PLACEHOLDER`) and ApplicationSet / kustomize patches. ODF OSD disks intentionally use fixed StorageClass **`managed-csi-v2`** (Premium SSD v2); app PVCs keep using the cluster default (`managed-csi`).
+Do **not** hardcode the Azure apps domain in Git manifests. Use placeholders (e.g. `PLACEHOLDER`) and ApplicationSet / kustomize patches. ODF OSD disks use StorageClass **`managed-csi-v2`** (Premium SSD v2) from `setup/storage`; app PVCs keep using the cluster default (`managed-csi`).
+
+---
+
+## OpenShift Virtualization via GitOps
+
+Installs the OpenShift Virtualization Operator and `HyperConverged` CR in the mandatory `openshift-cnv` namespace ([OCP 4.20 install docs](https://docs.redhat.com/en/documentation/openshift_container_platform/4.20/html/virtualization/installing)).
+
+| Path | Contents |
+|------|----------|
+| `argocd/manifests/openshift-virtualization/operator/` | Namespace, OperatorGroup, Subscription `hco-operatorhub` (`redhat-operators` / `stable`) |
+| `argocd/manifests/openshift-virtualization/instance/` | `HyperConverged` `kubevirt-hyperconverged` |
+
+Applications (sync waves):
+
+| App | Wave | Path |
+|-----|------|------|
+| `cnv-operator` | `1` | operator Subscription |
+| `cnv-hyperconverged` | `2` | HyperConverged CR (waits for CRDs; `SkipDryRunOnMissingResource`) |
+
+Node placement (lab topology):
+
+- **Subscription** `spec.config` → HCO operator pods on **infra** (`nodeSelector` + `reserved` toleration)
+- **HyperConverged** `spec.infra.nodePlacement` → virt control-plane components on **infra**
+- **HyperConverged** `spec.workloads.nodePlacement` → `virt-handler` / VM launchers on **worker-only** nodes (affinity: has `worker`, excludes `infra` and `storage`)
+
+Requires workers from `setup/workers/install.sh` (nested virt MachineConfig) before VMs can run.
+
+### Manual apply (until Git is synced)
+
+```bash
+kubectl apply -k argocd/manifests/openshift-virtualization/operator/
+# Wait for CSV Succeeded, then:
+oc get csv -n openshift-cnv
+
+kubectl apply -k argocd/manifests/openshift-virtualization/instance/
+oc wait hyperconverged kubevirt-hyperconverged -n openshift-cnv \
+  --for=condition=Available --timeout=15m
+```
+
+Verify:
+
+```bash
+oc get csv -n openshift-cnv
+oc get hyperconverged kubevirt-hyperconverged -n openshift-cnv
+oc get pods -n openshift-cnv -o wide
+# virt-handler should be on worker-only nodes; HCO operator pods on infra
+```
 
 ---
 
@@ -355,39 +464,6 @@ kubectl get secret grafana-admin-credentials -n elasticsearch \
 
 ---
 
-## OpenShift Data Foundation via GitOps
-
-Manifests live under `argocd/manifests/odf/`. Child resources are declared in `argocd/manifests/applications/`:
-
-- `odf-operator-app.yaml` — Subscription `odf-operator` channel **`stable-4.20`** (match OCP major.minor) in `openshift-storage`
-- `odf-storagecluster-appset.yaml` — StorageCluster + **`managed-csi-v2`** StorageClass (Premium SSD v2 for OSD PVCs)
-
-Manual apply (if Git is not yet synced), after storage nodes exist and the operator CRDs are present:
-
-```bash
-kubectl apply -k argocd/manifests/odf/operator/
-# Wait until CSVs Succeeded and StorageCluster CRD exists
-oc get csv -n openshift-storage
-
-# Includes managed-csi-v2 SC + StorageCluster (storageClassName: managed-csi-v2)
-kubectl apply -k argocd/manifests/odf/storagecluster/
-```
-
-Verify:
-
-```bash
-oc get storagecluster -n openshift-storage
-# PHASE=Ready, VERSION matches ODF 4.20.x
-
-oc get sc
-# Expect ocs-storagecluster-ceph-rbd, ocs-storagecluster-cephfs, openshift-storage.noobaa.io
-
-oc get cephcluster -n openshift-storage -o jsonpath='{.items[0].status.ceph.health}{"\n"}'
-# HEALTH_OK
-```
-
----
-
 ## End-to-end checklist
 
 ```bash
@@ -396,6 +472,8 @@ export KUBECONFIG=/path/to/kubeconfig
 ./setup/infra/install.sh
 ./setup/gitops/install.sh
 ./setup/storage/install.sh
+# Install ODF operator + StorageCluster out-of-band (not via Argo CD)
+./setup/workers/install.sh
 ./argocd/main/apply-prerequisites.sh
 ./argocd/main/bootstrap-app-of-apps.sh
 ```
@@ -403,7 +481,7 @@ export KUBECONFIG=/path/to/kubeconfig
 Post-bootstrap checks:
 
 ```bash
-# Nodes: masters + infra + storage (no installer worker MachineSets)
+# Nodes: masters + infra + storage + workers
 oc get nodes
 oc get machineset -n openshift-machine-api
 
@@ -413,12 +491,16 @@ oc get pods -n openshift-image-registry -o wide
 oc get pods -n openshift-monitoring -o wide | grep -v node-exporter
 oc get pods -n openshift-gitops -o wide
 
-# ODF
+# ODF (installed out-of-band)
 oc get nodes -l cluster.ocs.openshift.io/openshift-storage
 oc get storagecluster -n openshift-storage
 
-# GitOps root app + cluster config
+# Workers for kube-burner
+oc get nodes -l 'node-role.kubernetes.io/worker,!node-role.kubernetes.io/infra,!node-role.kubernetes.io/storage' -o wide
+
+# GitOps root app + CNV + cluster config
 oc get application -n openshift-gitops
+oc get hyperconverged kubevirt-hyperconverged -n openshift-cnv
 kubectl get secret openshift-gitops-cluster-configuration -n openshift-gitops \
   -o jsonpath='{.metadata.annotations.ingress-domain}{"\n"}'
 
@@ -434,9 +516,10 @@ oc get co
 |----------|--------|---------|
 | `REPO_URL` | `bootstrap-app-of-apps.sh` | `https://github.com/rgordill/openshift-virt-loadtest.git` |
 | `TARGET_REVISION` | `bootstrap-app-of-apps.sh` | `HEAD` |
-| `INFRA_VM_SIZE` / `INFRA_REPLICAS` | `setup/infra/params.env` | `Standard_D8s_v3` / `1` |
-| `ODF_VM_SIZE` / `ODF_REPLICAS` | `setup/storage/params.env` | `Standard_D16s_v3` / `1` |
-| `INFRA_ZONES` / `ODF_ZONES` | env override | All zones from MachineSets |
+| `INFRA_VM_SIZE` / `INFRA_REPLICAS` | `setup/infra/params.env` | `Standard_D8s_v6` / `1` |
+| `ODF_VM_SIZE` / `ODF_REPLICAS` | `setup/storage/params.env` | `Standard_D16s_v6` / `1` |
+| `WORKER_VM_SIZE` / `WORKER_REPLICAS` | `setup/workers/params.env` | `Standard_E32as_v6` / `1` |
+| `INFRA_ZONES` / `ODF_ZONES` / `WORKER_ZONES` | env override | All zones from MachineSets |
 
 AppProject `sourceRepos` includes the default Git remote; forks should update `argocd/manifests/cluster-objects/project.yaml` (or extend bootstrap) to allow their remote.
 
@@ -446,7 +529,8 @@ AppProject `sourceRepos` includes the default Git remote; forks should update `a
 
 After the root app is Healthy/Synced:
 
-- Add OpenShift Virtualization / KubeVirt Applications under `argocd/manifests/applications/`
+- Confirm `cnv-operator` / `cnv-hyperconverged` are Synced and HyperConverged is Available
+- Run kube-burner-ocp against the worker nodes from `setup/workers/install.sh`
 - Use ApplicationSets with `ingress-domain` wherever Ingress hosts are required
 - Prefer StorageClasses from ODF (`ocs-storagecluster-ceph-rbd`, …) for VM disks / load-test PVCs
 - Avoid day-2 `oc apply` outside `setup/*/install.sh` and `argocd/main/` bootstrap

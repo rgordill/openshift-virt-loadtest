@@ -351,15 +351,30 @@ if [[ "$ERRORS" -gt 0 || "$PLACEMENT_ERRORS" -gt 0 ]]; then
   exit 1
 fi
 
-# --- Scale down / delete old worker MachineSets (no-op if already removed) ---
+# --- Scale down / delete installer worker MachineSets (no-op if already removed) ---
+# Skip load-test workers created by setup/workers/install.sh (labeled part-of).
 echo ""
 echo "============================================"
 echo " Removing old worker nodes"
 echo "============================================"
 
-WORKER_MACHINESETS=$(list_machinesets_matching 'worker')
+WORKER_MACHINESETS=$(oc get machineset -n openshift-machine-api -o json | python3 -c "
+import json,sys
+for ms in json.load(sys.stdin).get('items', []):
+    name = ms['metadata']['name']
+    if 'worker' not in name:
+        continue
+    if '-infra-' in name or '-storage-' in name:
+        continue
+    labels = ms['metadata'].get('labels') or {}
+    if labels.get('app.kubernetes.io/part-of') == 'openshift-virt-loadtest':
+        print(f\"  skip managed worker MachineSet: {name}\", file=sys.stderr)
+        continue
+    print(name)
+")
+
 if [[ -z "$WORKER_MACHINESETS" ]]; then
-  echo "No worker MachineSets found (already removed)."
+  echo "No installer worker MachineSets found (already removed)."
 else
   for WMS in $WORKER_MACHINESETS; do
     CURRENT=$(oc get machineset "$WMS" -n openshift-machine-api -o jsonpath='{.spec.replicas}')
@@ -372,23 +387,29 @@ else
   done
 
   echo ""
-  echo "Waiting for worker nodes to drain and terminate..."
+  echo "Waiting for installer worker MachineSets to report 0 Ready replicas..."
   TIMEOUT=900
   INTERVAL=30
   ELAPSED=0
 
   while true; do
-    WORKER_COUNT=$(oc get nodes -l 'node-role.kubernetes.io/worker,!node-role.kubernetes.io/infra' --no-headers 2>/dev/null | wc -l | tr -d ' ')
-    echo "  Worker-only nodes remaining: ${WORKER_COUNT} (elapsed: ${ELAPSED}s)"
+    READY_LEFT=0
+    for WMS in $WORKER_MACHINESETS; do
+      READY=$(oc get machineset "$WMS" -n openshift-machine-api -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo 0)
+      READY_LEFT=$((READY_LEFT + ${READY:-0}))
+    done
+    echo "  Installer worker Ready replicas remaining: ${READY_LEFT} (elapsed: ${ELAPSED}s)"
 
-    if [[ "$WORKER_COUNT" -eq 0 ]]; then
-      echo "All old worker nodes removed."
+    if [[ "$READY_LEFT" -eq 0 ]]; then
+      echo "All installer worker nodes removed."
       break
     fi
 
     if [[ "$ELAPSED" -ge "$TIMEOUT" ]]; then
       echo "ERROR: Timed out waiting for worker removal after ${TIMEOUT}s."
-      oc get nodes -l 'node-role.kubernetes.io/worker,!node-role.kubernetes.io/infra' -o wide
+      for WMS in $WORKER_MACHINESETS; do
+        oc get machineset "$WMS" -n openshift-machine-api
+      done
       exit 1
     fi
 
@@ -397,7 +418,7 @@ else
   done
 
   echo ""
-  echo "Deleting old worker MachineSets..."
+  echo "Deleting installer worker MachineSets..."
   for WMS in $WORKER_MACHINESETS; do
     if oc get machineset "$WMS" -n openshift-machine-api &>/dev/null; then
       echo "  Deleting ${WMS}..."

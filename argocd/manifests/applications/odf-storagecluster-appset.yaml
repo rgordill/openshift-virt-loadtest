@@ -30,14 +30,16 @@ spec:
         namespace: openshift-storage
       syncPolicy:
         automated:
-          prune: true
+          # Do not prune: deleting StorageCluster uninstalls the whole Ceph cluster.
+          prune: false
           selfHeal: true
           allowEmpty: false
         syncOptions:
           - ServerSideApply=true
+          - SkipDryRunOnMissingResource=true
         retry:
-          limit: 5
+          limit: 15
           backoff:
-            duration: 5s
+            duration: 10s
             factor: 2
-            maxDuration: 3m
+            maxDuration: 5m

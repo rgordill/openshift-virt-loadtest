@@ -3,6 +3,9 @@ kind: StorageCluster
 metadata:
   name: ocs-storagecluster
   namespace: openshift-storage
+  annotations:
+    # Never prune/delete via Argo CD — ODF uninstall is destructive and slow.
+    argocd.argoproj.io/sync-options: Prune=false
 spec:
   storageDeviceSets:
     - name: ocs-deviceset

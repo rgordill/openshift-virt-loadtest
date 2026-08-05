@@ -66,7 +66,7 @@ export DISK_SKU="$ODF_DISK_SKU"
 bash "$SCRIPT_DIR/check-disk-sku.sh"
 echo ""
 
-SC_MANIFEST="$SCRIPT_DIR/../../argocd/manifests/odf/storagecluster/managed-csi-v2-storageclass.yaml"
+SC_MANIFEST="$SCRIPT_DIR/managed-csi-v2-storageclass.yaml"
 echo "Applying OSD StorageClass ${ODF_OSD_STORAGE_CLASS} (${ODF_DISK_SKU})..."
 oc apply -f "$SC_MANIFEST"
 oc get sc "$ODF_OSD_STORAGE_CLASS"

@@ -1,0 +1,22 @@
+# Ensure nested KVM is enabled on worker nodes (AMD + Intel).
+# Recent OCP enables nested virt by default; this MachineConfig makes it explicit
+# via /etc/modprobe.d/kvm.conf and rolls the worker MachineConfigPool.
+apiVersion: machineconfiguration.openshift.io/v1
+kind: MachineConfig
+metadata:
+  name: 80-enable-nested-virt
+  labels:
+    machineconfiguration.openshift.io/role: worker
+    app.kubernetes.io/part-of: openshift-virt-loadtest
+spec:
+  config:
+    ignition:
+      version: 3.2.0
+    storage:
+      files:
+        - path: /etc/modprobe.d/kvm.conf
+          mode: 0644
+          contents:
+            # options kvm_intel nested=1
+            # options kvm_amd nested=1
+            source: data:text/plain;charset=utf-8;base64,b3B0aW9ucyBrdm1faW50ZWwgbmVzdGVkPTEKb3B0aW9ucyBrdm1fYW1kIG5lc3RlZD0xCg==

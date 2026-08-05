@@ -1,0 +1,14 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: managed-csi-v2
+  labels:
+    app.kubernetes.io/part-of: openshift-virt-loadtest
+provisioner: disk.csi.azure.com
+parameters:
+  # Premium SSD v2 (LRS). Requires cachingMode None — host caching is unsupported.
+  skuname: PremiumV2_LRS
+  cachingMode: None
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
