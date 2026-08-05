@@ -1,0 +1,39 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+- app-of-apps.yaml
+
+replacements:
+- source:
+    fieldPath: data.REPO_URL
+    kind: ConfigMap
+    name: bootstrap-params
+  targets:
+  - fieldPaths:
+    - spec.sources.0.repoURL
+    - spec.sources.1.repoURL
+    select:
+      kind: Application
+      name: openshift-virt-loadtest-app
+- source:
+    fieldPath: data.TARGET_REVISION
+    kind: ConfigMap
+    name: bootstrap-params
+  targets:
+  - fieldPaths:
+    - spec.sources.0.targetRevision
+    - spec.sources.1.targetRevision
+    select:
+      kind: Application
+      name: openshift-virt-loadtest-app
+
+generatorOptions:
+  disableNameSuffixHash: true
+configMapGenerator:
+- literals:
+  - REPO_URL=https://github.com/rgordill/openshift-virt-loadtest.git
+  - TARGET_REVISION=HEAD
+  name: bootstrap-params
+  options:
+    disableNameSuffixHash: true

@@ -1,0 +1,30 @@
+# Grafana UI — Ingress with edge TLS (prefer over OpenShift Route per kubernetes.mdc).
+# Host PLACEHOLDER → grafana.<ingress-domain> via ApplicationSet.
+# tls.secretName may hold the cluster wildcard cert (or a cert-manager cert).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: grafana
+  namespace: elasticsearch
+  labels:
+    app: grafana
+  annotations:
+    route.openshift.io/termination: edge
+    route.openshift.io/insecureEdgeTerminationPolicy: Redirect
+spec:
+  ingressClassName: openshift-default
+  tls:
+    - hosts:
+        - PLACEHOLDER
+      secretName: grafana-tls
+  rules:
+    - host: PLACEHOLDER
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: grafana-service
+                port:
+                  number: 3000

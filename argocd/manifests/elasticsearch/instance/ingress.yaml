@@ -1,0 +1,27 @@
+# External access to Elasticsearch HTTPS API.
+# Prefer Ingress over OpenShift Route (kubernetes.mdc).
+# Passthrough: TLS ends at the ES pod. Empty path + ImplementationSpecific is
+# required — OpenShift router rejects path "/" with passthrough termination.
+# Host PLACEHOLDER is replaced by ApplicationSet: elasticsearch.<ingress-domain>
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: elasticsearch
+  namespace: elasticsearch
+  labels:
+    app: elasticsearch
+  annotations:
+    route.openshift.io/termination: passthrough
+spec:
+  ingressClassName: openshift-default
+  rules:
+    - host: PLACEHOLDER
+      http:
+        paths:
+          - path: ""
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: elasticsearch-es-http
+                port:
+                  number: 9200

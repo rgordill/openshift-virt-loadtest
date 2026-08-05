@@ -1,0 +1,66 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cluster-configuration-hook
+  namespace: openshift-gitops
+  labels:
+    app: argocd-main
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cluster-configuration-ingress-reader
+  labels:
+    app: argocd-main
+rules:
+  - apiGroups: ["config.openshift.io"]
+    resources: ["ingresses", "clusterversions"]
+    verbs: ["get"]
+    resourceNames: ["cluster", "version"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cluster-configuration-ingress-reader
+  labels:
+    app: argocd-main
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-configuration-ingress-reader
+subjects:
+  - kind: ServiceAccount
+    name: cluster-configuration-hook
+    namespace: openshift-gitops
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cluster-configuration-hook
+  namespace: openshift-gitops
+  labels:
+    app: argocd-main
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cluster-configuration-hook
+  namespace: openshift-gitops
+  labels:
+    app: argocd-main
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cluster-configuration-hook
+subjects:
+  - kind: ServiceAccount
+    name: cluster-configuration-hook
+    namespace: openshift-gitops

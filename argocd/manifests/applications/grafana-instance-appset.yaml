@@ -1,0 +1,63 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: grafana-instance
+  namespace: openshift-gitops
+spec:
+  project: openshift-virt-loadtest
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - clusters:
+        selector:
+          matchLabels:
+            argocd.argoproj.io/cluster-name: in-cluster
+  template:
+    metadata:
+      name: 'grafana-instance'
+      namespace: openshift-gitops
+      annotations:
+        argocd.argoproj.io/sync-wave: "3"
+        ingress-host: 'grafana.{{ index .metadata.annotations "ingress-domain" }}'
+    spec:
+      project: openshift-virt-loadtest
+      source:
+        repoURL: https://github.com/rgordill/openshift-virt-loadtest.git
+        targetRevision: HEAD
+        path: argocd/manifests/grafana/instance
+        kustomize:
+          patches:
+            - target:
+                kind: Grafana
+                name: grafana
+              patch: |-
+                - op: replace
+                  path: /spec/config/server/root_url
+                  value: "https://grafana.{{ index .metadata.annotations "ingress-domain" }}"
+            - target:
+                kind: Ingress
+                name: grafana
+              patch: |-
+                - op: replace
+                  path: /spec/rules/0/host
+                  value: "grafana.{{ index .metadata.annotations "ingress-domain" }}"
+                - op: replace
+                  path: /spec/tls/0/hosts/0
+                  value: "grafana.{{ index .metadata.annotations "ingress-domain" }}"
+      destination:
+        server: '{{.server}}'
+        namespace: elasticsearch
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+          allowEmpty: false
+        syncOptions:
+          - ServerSideApply=true
+        retry:
+          limit: 5
+          backoff:
+            duration: 5s
+            factor: 2
+            maxDuration: 3m

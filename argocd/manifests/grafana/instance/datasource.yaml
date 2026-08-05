@@ -1,0 +1,34 @@
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDatasource
+metadata:
+  name: elasticsearch-datasource
+  namespace: elasticsearch
+  labels:
+    app: grafana
+spec:
+  uid: elasticsearch-kube-burner
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+  valuesFrom:
+    - targetPath: secureJsonData.basicAuthPassword
+      valueFrom:
+        secretKeyRef:
+          name: elasticsearch-es-elastic-user
+          key: elastic
+  datasource:
+    name: Elasticsearch
+    type: elasticsearch
+    access: proxy
+    url: https://elasticsearch-es-http.elasticsearch.svc:9200
+    basicAuth: true
+    basicAuthUser: elastic
+    isDefault: true
+    jsonData:
+      index: kube-burner
+      timeField: timestamp
+      esVersion: "8.0.0"
+      tlsSkipVerify: true
+      timeInterval: 10s
+    secureJsonData:
+      basicAuthPassword: ${elastic}

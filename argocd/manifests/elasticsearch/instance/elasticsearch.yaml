@@ -1,0 +1,49 @@
+# Elasticsearch cluster for kube-burner metrics.
+# Use Azure managed-csi (not ODF/Ceph) so volumes attach on infra nodes.
+apiVersion: elasticsearch.k8s.elastic.co/v1
+kind: Elasticsearch
+metadata:
+  name: elasticsearch
+  namespace: elasticsearch
+  labels:
+    app: elasticsearch
+spec:
+  version: 8.16.1
+  nodeSets:
+    - name: default
+      count: 3
+      config:
+        node.roles:
+          - master
+          - data
+        node.store.allow_mmap: false
+      volumeClaimTemplates:
+        - metadata:
+            name: elasticsearch-data
+          spec:
+            accessModes:
+              - ReadWriteOnce
+            resources:
+              requests:
+                storage: 50Gi
+            storageClassName: managed-csi
+      podTemplate:
+        metadata:
+          labels:
+            app: elasticsearch
+        spec:
+          nodeSelector:
+            node-role.kubernetes.io/infra: ""
+          tolerations:
+            - key: node-role.kubernetes.io/infra
+              value: reserved
+              effect: NoSchedule
+          containers:
+            - name: elasticsearch
+              resources:
+                requests:
+                  memory: 4Gi
+                  cpu: "1"
+                limits:
+                  memory: 4Gi
+                  cpu: "2"

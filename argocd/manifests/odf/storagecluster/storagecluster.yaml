@@ -1,0 +1,22 @@
+apiVersion: ocs.openshift.io/v1
+kind: StorageCluster
+metadata:
+  name: ocs-storagecluster
+  namespace: openshift-storage
+spec:
+  storageDeviceSets:
+    - name: ocs-deviceset
+      count: 1
+      dataPVCTemplate:
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 2Ti
+          # Azure Premium SSD v2 — created by setup/storage/install.sh
+          storageClassName: managed-csi-v2
+          volumeMode: Block
+      placement: {}
+      portable: true
+      replica: 3

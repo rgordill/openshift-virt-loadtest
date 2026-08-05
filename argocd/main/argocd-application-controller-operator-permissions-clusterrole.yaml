@@ -1,0 +1,72 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: argocd-application-controller-operator-crds
+  labels:
+    app.kubernetes.io/managed-by: openshift-gitops
+    app.kubernetes.io/name: openshift-gitops
+    app.kubernetes.io/part-of: argocd
+    argocd/aggregate-to-admin: "true"
+rules:
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources: ["mutatingwebhookconfigurations", "validatingwebhookconfigurations"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # OpenShift Virtualization / KubeVirt CRDs
+  - apiGroups: ["kubevirt.io"]
+    resources: ["*"]
+    verbs: ["*"]
+  - apiGroups: ["cdi.kubevirt.io"]
+    resources: ["*"]
+    verbs: ["*"]
+  - apiGroups: ["hco.kubevirt.io"]
+    resources: ["*"]
+    verbs: ["*"]
+  - apiGroups: ["ssp.kubevirt.io"]
+    resources: ["*"]
+    verbs: ["*"]
+  - apiGroups: ["networkaddonsoperator.network.kubevirt.io"]
+    resources: ["*"]
+    verbs: ["*"]
+  - apiGroups: ["k8s.cni.cncf.io"]
+    resources: ["*"]
+    verbs: ["*"]
+  # Monitoring CRs
+  - apiGroups: ["monitoring.coreos.com"]
+    resources: ["*"]
+    verbs: ["*"]
+  # Snapshot support
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["*"]
+    verbs: ["*"]
+  # ODF / OCS CRDs
+  - apiGroups: ["ocs.openshift.io"]
+    resources: ["*"]
+    verbs: ["*"]
+  - apiGroups: ["odf.openshift.io"]
+    resources: ["*"]
+    verbs: ["*"]
+  - apiGroups: ["ceph.rook.io"]
+    resources: ["*"]
+    verbs: ["*"]
+  - apiGroups: ["noobaa.io"]
+    resources: ["*"]
+    verbs: ["*"]
+  # OLM (for managing Subscriptions/OperatorGroups via GitOps)
+  - apiGroups: ["operators.coreos.com"]
+    resources: ["*"]
+    verbs: ["*"]
+  # Elasticsearch (ECK)
+  - apiGroups: ["elasticsearch.k8s.elastic.co"]
+    resources: ["*"]
+    verbs: ["*"]
+  - apiGroups: ["agent.k8s.elastic.co", "apm.k8s.elastic.co", "beat.k8s.elastic.co", "enterprisesearch.k8s.elastic.co", "kibana.k8s.elastic.co", "maps.k8s.elastic.co", "autoscaling.k8s.elastic.co", "logstash.k8s.elastic.co"]
+    resources: ["*"]
+    verbs: ["*"]
+  # Grafana Operator
+  - apiGroups: ["grafana.integreatly.org"]
+    resources: ["*"]
+    verbs: ["*"]

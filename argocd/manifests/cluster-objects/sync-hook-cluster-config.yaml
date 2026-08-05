@@ -1,0 +1,73 @@
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cluster-configuration-hook
+  namespace: openshift-gitops
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded
+spec:
+  ttlSecondsAfterFinished: 300
+  backoffLimit: 5
+  template:
+    metadata:
+      labels:
+        app: argocd-main
+        argocd.argoproj.io/hook: "true"
+    spec:
+      serviceAccountName: cluster-configuration-hook
+      restartPolicy: OnFailure
+      tolerations:
+        - key: node-role.kubernetes.io/infra
+          value: reserved
+          effect: NoSchedule
+      nodeSelector:
+        node-role.kubernetes.io/infra: ""
+      containers:
+        - name: get-cluster-config
+          image: registry.redhat.io/openshift4/ose-cli-rhel9:v4.20
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              DOMAIN=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}' 2>/dev/null) || true
+              [ -z "$DOMAIN" ] && echo "Error: No ingress domain found" && exit 1
+              echo "Discovered ingress domain: ${DOMAIN}"
+
+              DEFAULT_SC=$(kubectl get sc -o jsonpath='{range .items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")]}{.metadata.name}{end}' 2>/dev/null) || true
+              [ -z "$DEFAULT_SC" ] && DEFAULT_SC="managed-csi"
+              echo "Default storage class: ${DEFAULT_SC}"
+
+              # Prefer Premium SSD v2 SC for ODF OSDs when present
+              ODF_OSD_SC="managed-csi-v2"
+              if ! kubectl get sc "${ODF_OSD_SC}" >/dev/null 2>&1; then
+                ODF_OSD_SC="${DEFAULT_SC}"
+                echo "Warning: managed-csi-v2 not found; ODF OSD class fallback: ${ODF_OSD_SC}"
+              fi
+              echo "ODF OSD storage class: ${ODF_OSD_SC}"
+
+              OCP_VERSION=$(kubectl get clusterversion version -o jsonpath='{.status.desired.version}' 2>/dev/null) || true
+              OCP_CHANNEL=$(echo "$OCP_VERSION" | grep -oP '^\d+\.\d+' || echo "4.20")
+              echo "OCP version: ${OCP_VERSION} (channel: ${OCP_CHANNEL})"
+
+              SECRET_NAME="openshift-gitops-cluster-configuration"
+              cat <<EOF | kubectl apply -n openshift-gitops -f -
+              apiVersion: v1
+              kind: Secret
+              metadata:
+                name: ${SECRET_NAME}
+                labels:
+                  argocd.argoproj.io/secret-type: cluster
+                  argocd.argoproj.io/cluster-name: in-cluster
+                annotations:
+                  ingress-domain: "${DOMAIN}"
+                  default-storage-class: "${DEFAULT_SC}"
+                  odf-osd-storage-class: "${ODF_OSD_SC}"
+                  ocp-version: "${OCP_VERSION}"
+                  ocp-channel: "${OCP_CHANNEL}"
+              type: Opaque
+              stringData:
+                name: in-cluster
+                server: https://kubernetes.default.svc
+              EOF

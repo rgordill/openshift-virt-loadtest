@@ -1,0 +1,30 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: openshift-virt-loadtest
+  namespace: openshift-gitops
+spec:
+  description: Project for OpenShift Virtualization load test applications
+
+  sourceRepos:
+    - https://github.com/rgordill/openshift-virt-loadtest.git
+    - https://github.com/rgordill/openshift-virt-loadtest
+
+  destinations:
+    - namespace: "openshift-gitops"
+      server: https://kubernetes.default.svc
+    - namespace: "openshift-cnv"
+      server: https://kubernetes.default.svc
+    - namespace: "openshift-storage"
+      server: https://kubernetes.default.svc
+    - namespace: "elasticsearch"
+      server: https://kubernetes.default.svc
+    - namespace: "loadtest"
+      server: https://kubernetes.default.svc
+
+  clusterResourceWhitelist:
+    - group: "*"
+      kind: "*"
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"
