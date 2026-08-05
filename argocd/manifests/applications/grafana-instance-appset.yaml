@@ -45,6 +45,14 @@ spec:
                 - op: replace
                   path: /spec/tls/0/hosts/0
                   value: "grafana.{{ index .metadata.annotations "ingress-domain" }}"
+            # ClusterRoleBinding subject namespace must match destination.namespace below.
+            - target:
+                kind: ClusterRoleBinding
+                name: grafana-thanos-view
+              patch: |-
+                - op: replace
+                  path: /subjects/0/namespace
+                  value: "elasticsearch"
       destination:
         server: '{{.server}}'
         namespace: elasticsearch

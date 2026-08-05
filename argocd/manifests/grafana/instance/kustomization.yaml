@@ -5,3 +5,4 @@ resources:
   - grafana.yaml
   - ingress.yaml
   - datasource.yaml
+  - thanos-datasource.yaml

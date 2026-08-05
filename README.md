@@ -409,18 +409,19 @@ Based on the PoC use cases in `specs/Azure-Virtualization-PoC-EJ.md`, adapted fo
 | `argocd/manifests/elasticsearch/operator/` | Namespace, OperatorGroup, ECK Subscription (`certified-operators` / `stable`) |
 | `argocd/manifests/elasticsearch/instance/` | Elasticsearch CR (3 nodes), passthrough Ingress |
 | `argocd/manifests/grafana/operator/` | Grafana Operator Subscription (`community-operators` / `v5`) |
-| `argocd/manifests/grafana/instance/` | Grafana CR + image-renderer, edge Ingress, Elasticsearch Datasource |
+| `argocd/manifests/grafana/instance/` | Grafana CR + image-renderer, edge Ingress, Elasticsearch + Thanos datasources |
 
 Improvements vs the PoC doc:
 
 - **Ingress** (`ingressClassName: openshift-default`) instead of OpenShift `Route`
   - Elasticsearch: `route.openshift.io/termination: passthrough` with empty `path` + `ImplementationSpecific` (OpenShift rejects `/` on passthrough)
-  - Grafana: edge termination + Redirect
+  - Grafana: edge termination + Redirect (no custom TLS secret — OpenShift router default wildcard cert; a missing `tls.secretName` blocked Route creation)
 - Hosts and `root_url` use `PLACEHOLDER`, injected as `elasticsearch.<ingress-domain>` / `grafana.<ingress-domain>`
 - PVC `storageClassName` is fixed to Azure **`managed-csi`** (not ODF/Ceph — RBD CSI only attaches on storage nodes; ES/Grafana run on infra)
 - Operators and workloads pinned to **infra** nodes (`nodeSelector` + `reserved` toleration); Subscription `spec.config` for operator pods — **lab shortcut only**; see the [subscription note](#architecture-after-bootstrap) above (user apps on infra can qualify those nodes as workers)
 - No plaintext admin password in Git (Grafana Operator generates `grafana-admin-credentials`)
 - Image renderer image pinned to `docker.io/grafana/grafana-image-renderer:latest` (PoC used the same tag)
+- **Thanos** Prometheus datasource → in-cluster `thanos-querier.openshift-monitoring.svc:9091` via SA token + `cluster-monitoring-view` (Elasticsearch remains the default datasource)
 
 Applications (sync waves): operator apps → elasticsearch instance → grafana instance.
 
@@ -434,19 +435,12 @@ kubectl apply -k argocd/manifests/elasticsearch/operator/
 kubectl apply -k argocd/manifests/grafana/operator/
 # Wait for CSVs Succeeded, then:
 
-# Edge Ingress needs a TLS secret (cluster wildcard or cert-manager)
-kubectl get secret router-certs-default -n openshift-ingress -o jsonpath='{.data.tls\.crt}' | base64 -d > /tmp/tls.crt
-kubectl get secret router-certs-default -n openshift-ingress -o jsonpath='{.data.tls\.key}' | base64 -d > /tmp/tls.key
-kubectl create secret tls grafana-tls -n elasticsearch --cert=/tmp/tls.crt --key=/tmp/tls.key
-rm -f /tmp/tls.crt /tmp/tls.key
-
 kustomize build argocd/manifests/elasticsearch/instance/ | \
   sed -e "s/host: PLACEHOLDER/host: elasticsearch.${DOMAIN}/" | kubectl apply -f -
 
 kustomize build argocd/manifests/grafana/instance/ | \
   sed -e "s|https://PLACEHOLDER|https://grafana.${DOMAIN}|" \
-      -e "s/host: PLACEHOLDER/host: grafana.${DOMAIN}/g" \
-      -e "s/- PLACEHOLDER/- grafana.${DOMAIN}/g" | kubectl apply -f -
+      -e "s/host: PLACEHOLDER/host: grafana.${DOMAIN}/g" | kubectl apply -f -
 ```
 
 Verify:
@@ -454,6 +448,7 @@ Verify:
 ```bash
 kubectl get elasticsearch elasticsearch -n elasticsearch   # HEALTH=green
 kubectl get grafana grafana -n elasticsearch               # stageStatus=success
+kubectl get grafanadatasource -n elasticsearch             # elasticsearch-datasource, thanos
 curl -sk -u elastic:$(kubectl get secret elasticsearch-es-elastic-user -n elasticsearch \
   -o jsonpath='{.data.elastic}' | base64 -d) \
   https://elasticsearch.${DOMAIN}
@@ -461,6 +456,7 @@ curl -sk -u elastic:$(kubectl get secret elasticsearch-es-elastic-user -n elasti
 kubectl get secret grafana-admin-credentials -n elasticsearch \
   -o jsonpath='{.data.GF_SECURITY_ADMIN_USER}' | base64 -d; echo
 ```
+
 
 ---
 
