@@ -1,4 +1,18 @@
 ---
+# User-defined ClusterRole for the Argo CD Application Controller (cluster-scoped instance).
+# Permissions are aggregated into the controller's admin role when:
+# 1. spec.aggregatedClusterRoles is true on the ArgoCD CR, and
+# 2. This ClusterRole has the label argocd/aggregate-to-admin: 'true' and labels
+#    matching the Argo CD instance (managed-by = namespace, name = instance name).
+# See: https://docs.redhat.com/en/documentation/red_hat_openshift_gitops/1.19/html/declarative_cluster_configuration/customizing-permissions-by-creating-aggregated-cluster-roles
+#
+# With aggregatedClusterRoles enabled, the controller no longer gets broad default
+# write access — only what is listed here (plus the operator-managed view role).
+# Include both platform resources (Namespace, Secret, Ingress, …) and every CRD
+# API group this repo syncs.
+#
+# Apply before creating the app-of-apps: kubectl apply -f argocd/main/argocd-application-controller-operator-permissions-clusterrole.yaml
+# Adjust labels if your Argo CD instance name or namespace differ from openshift-gitops.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -9,6 +23,50 @@ metadata:
     app.kubernetes.io/part-of: argocd
     argocd/aggregate-to-admin: "true"
 rules:
+  # Platform resources needed for CreateNamespace + operator/workload syncs
+  - apiGroups: [""]
+    resources:
+      - namespaces
+      - configmaps
+      - secrets
+      - services
+      - serviceaccounts
+      - pods
+      - pods/log
+      - endpoints
+      - events
+      - persistentvolumeclaims
+      - persistentvolumes
+      - limitranges
+      - resourcequotas
+    verbs: ["*"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "daemonsets", "statefulsets", "replicasets"]
+    verbs: ["*"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["*"]
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["*"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses", "networkpolicies"]
+    verbs: ["*"]
+  - apiGroups: ["route.openshift.io"]
+    resources: ["routes"]
+    verbs: ["*"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings", "clusterroles", "clusterrolebindings"]
+    verbs: ["*"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses", "csidrivers", "csinodes", "csistoragecapacities", "volumeattachments"]
+    verbs: ["*"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["*"]
+  - apiGroups: ["project.openshift.io"]
+    resources: ["projects", "projectrequests"]
+    verbs: ["*"]
   - apiGroups: ["apiextensions.k8s.io"]
     resources: ["customresourcedefinitions"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
@@ -32,6 +90,27 @@ rules:
     resources: ["*"]
     verbs: ["*"]
   - apiGroups: ["k8s.cni.cncf.io"]
+    resources: ["*"]
+    verbs: ["*"]
+  - apiGroups: ["clone.kubevirt.io"]
+    resources: ["*"]
+    verbs: ["*"]
+  - apiGroups: ["instancetype.kubevirt.io"]
+    resources: ["*"]
+    verbs: ["*"]
+  - apiGroups: ["pool.kubevirt.io"]
+    resources: ["*"]
+    verbs: ["*"]
+  - apiGroups: ["migrations.kubevirt.io"]
+    resources: ["*"]
+    verbs: ["*"]
+  - apiGroups: ["hostpathprovisioner.kubevirt.io"]
+    resources: ["*"]
+    verbs: ["*"]
+  - apiGroups: ["snapshot.kubevirt.io"]
+    resources: ["*"]
+    verbs: ["*"]
+  - apiGroups: ["export.kubevirt.io"]
     resources: ["*"]
     verbs: ["*"]
   # Monitoring CRs

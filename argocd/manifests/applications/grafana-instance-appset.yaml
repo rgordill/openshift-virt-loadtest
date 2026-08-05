@@ -42,9 +42,6 @@ spec:
                 - op: replace
                   path: /spec/rules/0/host
                   value: "grafana.{{ index .metadata.annotations "ingress-domain" }}"
-                - op: replace
-                  path: /spec/tls/0/hosts/0
-                  value: "grafana.{{ index .metadata.annotations "ingress-domain" }}"
             # ClusterRoleBinding subject namespace must match destination.namespace below.
             - target:
                 kind: ClusterRoleBinding
